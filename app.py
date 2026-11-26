@@ -1,4 +1,4 @@
-﻿import io
+import io
 import wave
 import streamlit as st
 import wfdb
@@ -118,19 +118,27 @@ def analyze_custom_signal(raw_signal, fs=360):
 def digitize_ecg_image(uploaded_img, duration_sec=10, target_fs=360):
     img = Image.open(uploaded_img).convert("L")
     img_arr = np.array(img, dtype=float)
-    height, width = img_arr.shape
-    inverted = 255.0 - img_arr
+    h, w = img_arr.shape
+    # Crop middle row (Lead II strip) and skip header/footer text & left calibration pulse
+    roi = img_arr[int(h * 0.36):int(h * 0.62), int(w * 0.10):int(w * 0.95)]
+    rh, rw = roi.shape
+    # Suppress light pink/gray ECG gridlines using percentile darkness
+    inverted = np.clip(np.percentile(roi, 92) - roi, 0, None)
     trace_y = []
-    for col in range(width):
+    for col in range(rw):
         col_vals = inverted[:, col]
-        mask = col_vals >= (0.75 * np.max(col_vals))
-        y_indices = np.where(mask)
-        trace_y.append(np.mean(y_indices) if len(y_indices) > 0 else height / 2.0)
+        mx = np.max(col_vals)
+        if mx > 15:
+            y_indices = np.where(col_vals >= 0.70 * mx)[0]
+            trace_y.append(np.median(y_indices))
+        else:
+            trace_y.append(trace_y[-1] if trace_y else rh / 2.0)
 
-    raw_wave = (height / 2.0) - np.array(trace_y)
-    raw_wave = (raw_wave - np.mean(raw_wave)) / (np.std(raw_wave) + 1e-6)
-    target_len = int(duration_sec * target_fs)
-    return np.interp(np.linspace(0, 1, target_len), np.linspace(0, 1, len(raw_wave)), raw_wave)
+    raw_wave = (rh / 2.0) - np.array(trace_y)
+    # Scale peak amplitude to ~1.1 mV to match MIT-BIH Lead II calibration
+    p98 = np.percentile(np.abs(raw_wave - np.median(raw_wave)), 98) + 1e-6
+    raw_wave = ((raw_wave - np.median(raw_wave)) / p98) * 1.1
+    return np.interp(np.linspace(0, 1, int(duration_sec * target_fs)), np.linspace(0, 1, len(raw_wave)), raw_wave)
 
 def get_precautions_and_guidance(avg_hr, y_pred):
     unique_abnormal = [b for b in np.unique(y_pred) if b != 'Normal Beat (N)']
@@ -165,7 +173,7 @@ def get_precautions_and_guidance(avg_hr, y_pred):
         if avg_hr < 60:
             precautions.append("Monitor for dizziness, lightheadedness, or unusual fatigue, and review any rate-lowering medications with a doctor.")
 
-        precautions.append("Consult a qualified cardiologist or physician for formal clinical evaluationÃ¢â‚¬â€seek urgent medical care if accompanied by chest pain, shortness of breath, or fainting.")
+        precautions.append("Consult a qualified cardiologist or physician for formal clinical evaluation - ‚¬â€seek urgent medical care if accompanied by chest pain, shortness of breath, or fainting.")
 
     return level, hr_status, summary, precautions
 
